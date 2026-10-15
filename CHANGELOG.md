@@ -5,6 +5,21 @@ All notable changes to this package are documented here. The format follows
 [semantic versioning](https://semver.org/): a change to the public contract is a minor (or major)
 bump, never a silent edit.
 
+Add every change under `## [Unreleased]` as it lands on `development`; the Cut release workflow
+turns that section into the release's own.
+
+## [Unreleased]
+
+### Added
+
+- The Cut release workflow (`.github/workflows/cut-release.yml`): a manual dispatch that cuts
+  `release/<X.Y.Z>` from `development` with the version bumped and this CHANGELOG rolled, and opens
+  a draft PR into `main`. The release workflow now also merges `main` back into `development`
+  and deletes the release branch.
+- The Dev tag workflow (`.github/workflows/dev-tag.yml`): every merge into `development` is built
+  and tagged `v<next>-dev.<N>` (the next minor after the latest release, N counting up), with
+  `dist/` on the tagged commit so the app can install it as a git dependency.
+
 ## [0.1.0] - 2026-10-16
 
 The first release: the frozen v0.1 contract of CTA-216.

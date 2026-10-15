@@ -171,10 +171,34 @@ Node 22 (see `.nvmrc`).
 | one test | `npx vitest run test/retries.test.ts -t "bounds jitter"` |
 | build `dist/` | `npm run build` |
 
-CI runs lint, typecheck, test (with coverage) and build on every pull request. A release is cut by
-merging to `main` with a new `version` in `package.json` and its section in `CHANGELOG.md`: the
-release workflow builds, commits `dist/` on a release commit, tags `vX.Y.Z` and publishes a GitHub
-release with the CHANGELOG section.
+CI runs lint, typecheck, test (with coverage) and build on every pull request.
+
+### Releasing
+
+Record every change under `## [Unreleased]` in `CHANGELOG.md` as it lands on `development`.
+
+1. **Cut**: run the *Cut release* workflow (Actions → Cut release → Run workflow) and pick the bump:
+   `patch`, `minor` (default) or `major`. It computes the next version from the latest `vX.Y.Z`
+   tag, branches `release/<X.Y.Z>` off `development` with `package.json` bumped and the
+   Unreleased section dated as `## [X.Y.Z] - <today>`, and opens a draft PR into `main`. It
+   refuses an empty Unreleased section.
+2. **Check**: fix anything on the release branch with PRs into `release/<X.Y.Z>`.
+3. **Ship**: mark the draft PR ready and merge it into `main`. The *Release* workflow builds,
+   commits `dist/` on a release commit, tags `vX.Y.Z`, publishes the GitHub release with the
+   CHANGELOG section, merges `main` back into `development` (or opens a PR when that conflicts)
+   and deletes the release branch.
+
+### Dev builds
+
+Every merge into `development` is built and tagged `v<next>-dev.<N>` by the *Dev tag* workflow:
+`<next>` is the minor after the latest release (`v0.2.0-dev.1`, `v0.2.0-dev.2`, … after `v0.1.0`)
+and `<N>` starts again at 1 after each release. Like a release tag, a dev tag carries the built
+`dist/`, so the app can try unreleased work with
+`"@pgntools/jobs-runtime": "github:pgntools/jobs-runtime#v0.2.0-dev.3"`. Dev tags get no GitHub
+release.
+
+The cut workflow needs the repository setting *Allow GitHub Actions to create and approve pull
+requests* to be on.
 
 ## License
 

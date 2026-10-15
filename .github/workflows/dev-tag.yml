@@ -1,0 +1,95 @@
+# Tags every merge into development as a dev build: v<next>-dev.<N>.
+#
+#   <next> = the minor after the latest vX.Y.Z release (the Cut release default; 0.1.0 before the
+#            first release), so a dev tag always sorts after the release it builds on and before
+#            the release it leads to (SemVer prerelease ordering).
+#   <N>    = 1 + the highest existing v<next>-dev.* number; it starts again at 1 after a release.
+#
+# Like a release, the tagged commit carries the built dist/ (on a detached commit, so development
+# never carries build output) and package.json says the dev version, so the app can install it
+# as a git dependency: "@pgntools/jobs-runtime": "github:pgntools/jobs-runtime#v0.2.0-dev.3".
+# No GitHub release is published for dev tags.
+#
+# Pushes made by release.yml with the workflow token (its merge of main back into development)
+# do not trigger workflows, so a release does not mint a dev tag of itself.
+name: Dev tag
+
+on:
+  push:
+    branches: [development]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dev-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Build and tag v<next>-dev.<N>
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Verify and build
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm run test:coverage
+          npm run build
+
+      - name: Resolve the next dev tag
+        id: resolve
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          prev="$(git tag -l 'v[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+          if [ -z "${prev}" ]; then
+            next="0.1.0"
+          else
+            IFS=. read -r major minor _ <<< "${prev#v}"
+            next="${major}.$((minor + 1)).0"
+          fi
+          last="$(git tag -l "v${next}-dev.*" | sed -E 's/^.*-dev\.//' | grep -E '^[0-9]+$' | sort -n | tail -1 || true)"
+          n=$(( ${last:-0} + 1 ))
+          echo "prev=${prev:-<none>}" >> "$GITHUB_OUTPUT"
+          echo "version=${next}-dev.${n}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${next}-dev.${n}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit dist/ on a dev build commit and tag it
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --detach
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version >/dev/null
+          git add --force dist
+          git add package.json package-lock.json
+          git commit -m "Dev build ${TAG} (built dist/)"
+          git tag -a "${TAG}" -m "${TAG}"
+          git push origin "refs/tags/${TAG}"
+
+      - name: Job summary
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          PREV: ${{ steps.resolve.outputs.prev }}
+        run: |
+          {
+            echo "## Dev tag ${TAG}"
+            echo ""
+            echo "- built from \`development\` at \`${GITHUB_SHA::7}\` (latest release: ${PREV})"
+            echo "- install: \`\"@pgntools/jobs-runtime\": \"github:${GITHUB_REPOSITORY}#${TAG}\"\`"
+          } >> "$GITHUB_STEP_SUMMARY"
