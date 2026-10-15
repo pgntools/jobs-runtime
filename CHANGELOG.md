@@ -10,6 +10,8 @@ turns that section into the release's own.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-15
+
 ### Added
 
 - Releases are published to npm as `@pgntools/jobs-runtime` (dist-tag `latest`) from GitHub
