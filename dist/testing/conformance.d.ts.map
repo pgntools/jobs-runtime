@@ -1,0 +1,1 @@
+{"version":3,"file":"conformance.d.ts","sourceRoot":"","sources":["../../src/testing/conformance.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAa,QAAQ,EAAE,MAAM,gBAAgB,CAAC;AAE1D;;;;;;GAMG;AACH,wBAAgB,mBAAmB,CAAC,IAAI,EAAE,MAAM,QAAQ,GAAG,OAAO,CAAC,QAAQ,CAAC,GAAG;IAAE,IAAI,EAAE,MAAM,CAAC;IAAC,GAAG,EAAE,MAAM,OAAO,CAAC,IAAI,CAAC,CAAA;CAAE,EAAE,CA8H1H"}
