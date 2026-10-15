@@ -10,6 +10,11 @@ turns that section into the release's own.
 
 ## [Unreleased]
 
+### Added
+
+- Published to npm as `@pgntools/jobs-runtime`: releases under `latest`, dev builds under `dev`,
+  from GitHub Actions through npm trusted publishing (OIDC, no token) with provenance.
+
 ## [0.2.0] - 2026-10-15
 
 ### Added
