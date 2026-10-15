@@ -16,6 +16,9 @@ turns that section into the release's own.
   `release/<X.Y.Z>` from `development` with the version bumped and this CHANGELOG rolled, and opens
   a draft PR into `main`. The release workflow now also merges `main` back into `development`
   and deletes the release branch.
+- The Dev tag workflow (`.github/workflows/dev-tag.yml`): every merge into `development` is built
+  and tagged `v<next>-dev.<N>` (the next minor after the latest release, N counting up), with
+  `dist/` on the tagged commit so the app can install it as a git dependency.
 
 ## [0.1.0] - 2026-10-16
 

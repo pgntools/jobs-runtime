@@ -188,6 +188,15 @@ Record every change under `## [Unreleased]` in `CHANGELOG.md` as it lands on `de
    CHANGELOG section, merges `main` back into `development` (or opens a PR when that conflicts)
    and deletes the release branch.
 
+### Dev builds
+
+Every merge into `development` is built and tagged `v<next>-dev.<N>` by the *Dev tag* workflow:
+`<next>` is the minor after the latest release (`v0.2.0-dev.1`, `v0.2.0-dev.2`, … after `v0.1.0`)
+and `<N>` starts again at 1 after each release. Like a release tag, a dev tag carries the built
+`dist/`, so the app can try unreleased work with
+`"@pgntools/jobs-runtime": "github:pgntools/jobs-runtime#v0.2.0-dev.3"`. Dev tags get no GitHub
+release.
+
 The cut workflow needs the repository setting *Allow GitHub Actions to create and approve pull
 requests* to be on.
 
