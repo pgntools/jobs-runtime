@@ -10,6 +10,8 @@ turns that section into the release's own.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-15
+
 ### Added
 
 - The Cut release workflow (`.github/workflows/cut-release.yml`): a manual dispatch that cuts
