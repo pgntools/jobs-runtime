@@ -25,9 +25,9 @@ jobs:
       - run: npm ci
       - name: Lint
         run: npm run lint
-      - name: Typecheck (sources, tests and the contract type test)
+      - name: "Typecheck (sources, tests and the contract type test)"
         run: npm run typecheck
-      - name: Test (coverage gate: 90 % lines, branches, functions, statements)
+      - name: "Test (coverage gate: 90 % lines, branches, functions, statements)"
         run: npm run test:coverage
       - name: Build
         run: npm run build
