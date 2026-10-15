@@ -171,10 +171,25 @@ Node 22 (see `.nvmrc`).
 | one test | `npx vitest run test/retries.test.ts -t "bounds jitter"` |
 | build `dist/` | `npm run build` |
 
-CI runs lint, typecheck, test (with coverage) and build on every pull request. A release is cut by
-merging to `main` with a new `version` in `package.json` and its section in `CHANGELOG.md`: the
-release workflow builds, commits `dist/` on a release commit, tags `vX.Y.Z` and publishes a GitHub
-release with the CHANGELOG section.
+CI runs lint, typecheck, test (with coverage) and build on every pull request.
+
+### Releasing
+
+Record every change under `## [Unreleased]` in `CHANGELOG.md` as it lands on `development`.
+
+1. **Cut**: run the *Cut release* workflow (Actions → Cut release → Run workflow) and pick the bump:
+   `patch`, `minor` (default) or `major`. It computes the next version from the latest `vX.Y.Z`
+   tag, branches `release/<X.Y.Z>` off `development` with `package.json` bumped and the
+   Unreleased section dated as `## [X.Y.Z] - <today>`, and opens a draft PR into `main`. It
+   refuses an empty Unreleased section.
+2. **Check**: fix anything on the release branch with PRs into `release/<X.Y.Z>`.
+3. **Ship**: mark the draft PR ready and merge it into `main`. The *Release* workflow builds,
+   commits `dist/` on a release commit, tags `vX.Y.Z`, publishes the GitHub release with the
+   CHANGELOG section, merges `main` back into `development` (or opens a PR when that conflicts)
+   and deletes the release branch.
+
+The cut workflow needs the repository setting *Allow GitHub Actions to create and approve pull
+requests* to be on.
 
 ## License
 

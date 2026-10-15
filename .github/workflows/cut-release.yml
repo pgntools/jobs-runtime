@@ -1,0 +1,176 @@
+# Cuts a release. Manual dispatch: takes a bump level (patch / minor / major, default minor),
+# computes the next SemVer from the latest vX.Y.Z tag on origin + that level, branches
+# `release/<X.Y.Z>` off `development` with one commit that
+#   - sets package.json (and package-lock.json) to X.Y.Z, and
+#   - turns CHANGELOG.md's `## [Unreleased]` section into `## [X.Y.Z] - <today>`, leaving a
+#     fresh empty `## [Unreleased]` above it,
+# and opens a DRAFT PR into `main`.
+#
+# Fix anything found on the release branch with PRs into `release/<X.Y.Z>`, then mark the draft
+# PR ready and merge it into `main`. `release.yml` takes over on that push: it builds, commits
+# dist/ on a release commit, tags vX.Y.Z, publishes the GitHub release with the CHANGELOG
+# section, merges main back into development and deletes the release branch.
+#
+# The cut refuses an empty `## [Unreleased]` section: a release without notes is a mistake.
+#
+# Prereq: the repo setting "Allow GitHub Actions to create and approve pull requests" must be ON
+# for `gh pr create --draft` to succeed.
+name: Cut release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Bump level for the release (patch / minor / major)."
+        type: choice
+        required: true
+        default: minor
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    name: Cut release/<version> from development
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: development
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Resolve the version from the latest tag + bump level
+        id: resolve
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          case "${BUMP}" in
+            patch|minor|major) ;;
+            *) echo "::error::bump must be one of patch/minor/major (got '${BUMP}')"; exit 1 ;;
+          esac
+          # Ask origin for the tags (the checkout may not have fetched every one); plain vX.Y.Z only.
+          prev="$(git ls-remote --refs --tags origin 'v[0-9]*' \
+            | sed -E 's#.*refs/tags/##' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V | tail -1 || true)"
+          if [ -z "${prev}" ]; then
+            next="0.1.0"
+          else
+            export PREV="${prev}" LEVEL="${BUMP}"
+            # shellcheck disable=SC2016  # $-refs below are JS template literals, not shell
+            next="$(node -e '
+              const m = process.env.PREV.match(/^v(\d+)\.(\d+)\.(\d+)$/);
+              if (!m) { console.error("unparseable tag:", process.env.PREV); process.exit(2); }
+              let [maj, min, pat] = [+m[1], +m[2], +m[3]];
+              if (process.env.LEVEL === "major") { maj++; min = 0; pat = 0; }
+              else if (process.env.LEVEL === "minor") { min++; pat = 0; }
+              else { pat++; }
+              process.stdout.write(`${maj}.${min}.${pat}`);
+            ')"
+          fi
+          echo "prev=${prev:-<none — first release>}" >> "$GITHUB_OUTPUT"
+          echo "next=${next}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release/${{ steps.resolve.outputs.next }}
+        id: create
+        env:
+          NEXT: ${{ steps.resolve.outputs.next }}
+        run: |
+          set -euo pipefail
+          branch="release/${NEXT}"
+          if git ls-remote --exit-code --heads origin "${branch}" >/dev/null; then
+            echo "::error::Branch ${branch} already exists on origin. Delete it first, or choose a different bump."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v${NEXT}" >/dev/null; then
+            echo "::error::Tag v${NEXT} already exists."
+            exit 1
+          fi
+          git checkout -b "${branch}" origin/development
+
+          npm version "${NEXT}" --no-git-tag-version --allow-same-version >/dev/null
+
+          # Roll the CHANGELOG: `## [Unreleased]` becomes `## [X.Y.Z] - <date>`, under a fresh
+          # empty `## [Unreleased]`. Refuses a missing or empty Unreleased section.
+          RELEASE_DATE="$(date -u +%Y-%m-%d)" node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const { NEXT, RELEASE_DATE } = process.env;
+          const lines = readFileSync("CHANGELOG.md", "utf8").split("\n");
+          const start = lines.findIndex((line) => /^## \[Unreleased\]\s*$/i.test(line));
+          if (start === -1) {
+            console.error("::error::CHANGELOG.md has no '## [Unreleased]' section to release.");
+            process.exit(1);
+          }
+          const rest = lines.slice(start + 1);
+          const end = rest.findIndex((line) => line.startsWith("## "));
+          const notes = end === -1 ? rest : rest.slice(0, end);
+          if (!notes.some((line) => line.trim() !== "")) {
+            console.error("::error::CHANGELOG.md's '## [Unreleased]' section is empty: add the release notes first.");
+            process.exit(1);
+          }
+          lines.splice(start, 1, "## [Unreleased]", "", `## [${NEXT}] - ${RELEASE_DATE}`);
+          writeFileSync("CHANGELOG.md", lines.join("\n"));
+          JS
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json CHANGELOG.md
+          git commit -m "chore: cut release ${NEXT}"
+          git push -u origin "${branch}"
+          echo "::notice::Created ${branch} from development"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+
+      - name: Open a draft PR into main
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXT: ${{ steps.resolve.outputs.next }}
+          BRANCH: ${{ steps.create.outputs.branch }}
+        run: |
+          set -euo pipefail
+          # Unquoted heredoc so ${NEXT}/${BRANCH} expand; deliberately backtick-free.
+          cat > "$RUNNER_TEMP/body.md" <<EOF
+          Release v${NEXT}, cut from development.
+
+          1. Check the release on this branch. Fix anything as PRs into ${BRANCH}; no new features here.
+          2. When it is ready, mark this draft PR ready and merge it into main.
+          3. release.yml then builds, commits dist/ on a release commit, tags v${NEXT}, publishes the
+             GitHub release with the CHANGELOG section, merges main back into development and
+             deletes this branch.
+          EOF
+          url="$(gh pr create --base main --head "${BRANCH}" --draft \
+            --title "Release v${NEXT}" --body-file "$RUNNER_TEMP/body.md")"
+          echo "draft_pr=${url}" >> "$GITHUB_OUTPUT"
+          echo "${url}"
+
+      - name: Job summary
+        env:
+          NEXT: ${{ steps.resolve.outputs.next }}
+          PREV: ${{ steps.resolve.outputs.prev }}
+          BUMP: ${{ inputs.bump }}
+          BRANCH: ${{ steps.create.outputs.branch }}
+          DRAFT_PR: ${{ steps.pr.outputs.draft_pr }}
+        run: |
+          {
+            echo "## Cut release v${NEXT}"
+            echo ""
+            echo "- bump: ${BUMP} (from ${PREV})"
+            echo "- branch: \`${BRANCH}\` (cut from \`development\`)"
+            echo "- draft PR: ${DRAFT_PR}"
+            echo ""
+            echo "Next: check the release branch, then merge the draft PR into \`main\` — \`release.yml\` does the rest."
+          } >> "$GITHUB_STEP_SUMMARY"
