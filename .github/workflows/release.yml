@@ -4,6 +4,9 @@ name: Release
 # main never carries build output), tag it vX.Y.Z and publish a GitHub release with the
 # CHANGELOG section. The app installs the tag: "github:pgntools/jobs-runtime#vX.Y.Z" —
 # Yarn 1 does not reliably run prepare for git dependencies, so the tag must carry dist/.
+# The same commit is published to npm as @pgntools/jobs-runtime (dist-tag latest) through npm
+# trusted publishing: an OIDC token from this workflow, no npm token, provenance attached. It is
+# published before the git tag is pushed, so a failed publish leaves no tag and a re-run retries.
 # Then main is merged back into development (the version bump and the dated CHANGELOG reach it;
 # a conflict or a refused push opens a PR instead) and the release/<version> branch made by
 # cut-release.yml, if any, is deleted.
@@ -17,6 +20,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write # npm trusted publishing (OIDC)
 
 concurrency:
   group: release
@@ -61,7 +65,12 @@ jobs:
         if: steps.version.outputs.release == 'true'
         with:
           node-version-file: .nvmrc
-          cache: npm
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false # no caching in builds that publish
+
+      - name: Use npm 11 (trusted publishing needs npm 11.5.1 or later)
+        if: steps.version.outputs.release == 'true'
+        run: npm install -g npm@^11.5.1
 
       - name: Verify and build
         if: steps.version.outputs.release == 'true'
@@ -83,7 +92,25 @@ jobs:
           git add --force dist
           git commit -m "Release v$VERSION (built dist/)"
           git tag -a "v$VERSION" -m "v$VERSION"
-          git push origin "refs/tags/v$VERSION"
+
+      - name: Publish to npm (trusted publishing, with provenance)
+        if: steps.version.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Idempotent: a re-run after a later step failed finds the version already on npm.
+          if npm view "@pgntools/jobs-runtime@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::@pgntools/jobs-runtime@${VERSION} is already on npm"
+          else
+            npm publish --access public --tag latest
+          fi
+
+      - name: Push the tag
+        if: steps.version.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: git push origin "refs/tags/v$VERSION"
 
       - name: Publish the GitHub release
         if: steps.version.outputs.release == 'true'

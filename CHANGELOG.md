@@ -10,6 +10,12 @@ turns that section into the release's own.
 
 ## [Unreleased]
 
+### Added
+
+- Releases are published to npm as `@pgntools/jobs-runtime` (dist-tag `latest`) from GitHub
+  Actions through npm trusted publishing (OIDC, no token), with provenance. Dev builds stay git
+  tags only.
+
 ## [0.2.0] - 2026-10-15
 
 ### Added
