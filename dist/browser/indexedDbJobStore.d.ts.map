@@ -1,0 +1,1 @@
+{"version":3,"file":"indexedDbJobStore.d.ts","sourceRoot":"","sources":["../../src/browser/indexedDbJobStore.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAa,QAAQ,EAAE,MAAM,gBAAgB,CAAC;AAkC1D;;;;;GAKG;AACH,wBAAgB,iBAAiB,CAAC,EAAE,IAAI,EAAE,EAAE;IAAE,IAAI,EAAE,MAAM,CAAA;CAAE,GAAG,QAAQ,CAwLtE"}
