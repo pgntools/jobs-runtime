@@ -21,9 +21,9 @@ From npm:
 yarn add @pgntools/jobs-runtime   # or: npm i @pgntools/jobs-runtime
 ```
 
-Releases are published as `latest`, and every merge into `development` as a prerelease under
-the `dev` dist-tag (`@pgntools/jobs-runtime@dev`). Each version is published from GitHub Actions
-through npm trusted publishing, with a provenance attestation linking it to its source commit.
+Releases are published to npm (dist-tag `latest`) from GitHub Actions through npm trusted
+publishing, with a provenance attestation linking each version to its source commit. Dev builds
+are not published to npm; they are git tags only (see *Dev builds* below).
 
 Every release and dev tag in git also carries the built `dist/`, so a git tag dependency works too:
 
@@ -202,17 +202,19 @@ Record every change under `## [Unreleased]` in `CHANGELOG.md` as it lands on `de
 
 Every merge into `development` is built and tagged `v<next>-dev.<N>` by the *Dev tag* workflow:
 `<next>` is the minor after the latest release (`v0.2.0-dev.1`, `v0.2.0-dev.2`, … after `v0.1.0`)
-and `<N>` starts again at 1 after each release. Each dev build is published to npm under the
-`dev` dist-tag (`yarn add @pgntools/jobs-runtime@dev`, or an exact `0.3.0-dev.2`), and like a
-release tag its git tag carries the built `dist/`. Dev tags get no GitHub release.
+and `<N>` starts again at 1 after each release. Like a release tag, a dev tag carries the built
+`dist/`, so the app can try unreleased work with
+`"@pgntools/jobs-runtime": "github:pgntools/jobs-runtime#v0.3.0-dev.2"`. Dev builds are not
+published to npm and get no GitHub release.
 
 ### Publishing to npm
 
-`release.yml` (dist-tag `latest`) and `dev-tag.yml` (dist-tag `dev`) publish through npm trusted
-publishing: GitHub's OIDC token, no npm token stored anywhere. Both workflows are registered as
-trusted publishers of `@pgntools/jobs-runtime` on npmjs.com (organization `pgntools`, repository
-`jobs-runtime`). A version is published before its git tag is pushed, so a failed publish leaves
-no tag behind and a re-run retries; a version already on npm is not published again.
+Only releases are published. `release.yml` publishes each one (dist-tag `latest`) through npm
+trusted publishing: GitHub's OIDC token, no npm token stored anywhere. It is registered as the
+trusted publisher of `@pgntools/jobs-runtime` on npmjs.com (organization `pgntools`, repository
+`jobs-runtime`, workflow `release.yml`). A version is published before its git tag is pushed, so a
+failed publish leaves no tag behind and a re-run retries; a version already on npm is not
+published again.
 
 The cut workflow needs the repository setting *Allow GitHub Actions to create and approve pull
 requests* to be on.

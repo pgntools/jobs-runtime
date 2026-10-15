@@ -8,8 +8,6 @@
 # Like a release, the tagged commit carries the built dist/ (on a detached commit, so development
 # never carries build output) and package.json says the dev version, so the app can install it
 # as a git dependency: "@pgntools/jobs-runtime": "github:pgntools/jobs-runtime#v0.2.0-dev.3".
-# The same commit is published to npm under the dist-tag `dev` (npm i @pgntools/jobs-runtime@dev)
-# through npm trusted publishing — an OIDC token, no npm token — before the git tag is pushed.
 # No GitHub release is published for dev tags.
 #
 # Pushes made by release.yml with the workflow token (its merge of main back into development)
@@ -23,7 +21,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write # npm trusted publishing (OIDC)
 
 concurrency:
   group: dev-tag
@@ -41,11 +38,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
-          registry-url: https://registry.npmjs.org
-          package-manager-cache: false # no caching in builds that publish
-
-      - name: Use npm 11 (trusted publishing needs npm 11.5.1 or later)
-        run: npm install -g npm@^11.5.1
+          cache: npm
 
       - name: Verify and build
         run: |
@@ -87,24 +80,7 @@ jobs:
           git add package.json package-lock.json
           git commit -m "Dev build ${TAG} (built dist/)"
           git tag -a "${TAG}" -m "${TAG}"
-
-      - name: Publish to npm (trusted publishing, with provenance)
-        if: success()
-        env:
-          VERSION: ${{ steps.resolve.outputs.version }}
-        run: |
-          set -euo pipefail
-          # Idempotent: a re-run after a later step failed finds the version already on npm.
-          if npm view "@pgntools/jobs-runtime@${VERSION}" version >/dev/null 2>&1; then
-            echo "::notice::@pgntools/jobs-runtime@${VERSION} is already on npm"
-          else
-            npm publish --access public --tag dev
-          fi
-
-      - name: Push the tag
-        env:
-          TAG: ${{ steps.resolve.outputs.tag }}
-        run: git push origin "refs/tags/${TAG}"
+          git push origin "refs/tags/${TAG}"
 
       - name: Job summary
         env:
@@ -115,6 +91,5 @@ jobs:
             echo "## Dev tag ${TAG}"
             echo ""
             echo "- built from \`development\` at \`${GITHUB_SHA::7}\` (latest release: ${PREV})"
-            echo "- install from npm: \`npm i @pgntools/jobs-runtime@${TAG#v}\` (or \`@dev\` for the latest dev build)"
-            echo "- install from git: \`\"@pgntools/jobs-runtime\": \"github:${GITHUB_REPOSITORY}#${TAG}\"\`"
+            echo "- install: \`\"@pgntools/jobs-runtime\": \"github:${GITHUB_REPOSITORY}#${TAG}\"\`"
           } >> "$GITHUB_STEP_SUMMARY"
