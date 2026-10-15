@@ -5,7 +5,7 @@ All notable changes to this package are documented here. The format follows
 [semantic versioning](https://semver.org/): a change to the public contract is a minor (or major)
 bump, never a silent edit.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-16
 
 The first release: the frozen v0.1 contract of CTA-216.
 
