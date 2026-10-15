@@ -1,0 +1,89 @@
+name: Release
+
+# When a release reaches main: build, commit dist/ on a release commit (detached from main, so
+# main never carries build output), tag it vX.Y.Z and publish a GitHub release with the
+# CHANGELOG section. The app installs the tag: "github:pgntools/jobs-runtime#vX.Y.Z" —
+# Yarn 1 does not reliably run prepare for git dependencies, so the tag must carry dist/.
+# A version whose tag already exists is skipped, so re-runs and unrelated pushes are no-ops.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read the version
+        id: version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "Tag v$version exists: nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract the CHANGELOG section
+        if: steps.version.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "CHANGELOG.md has no section for $VERSION" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.version.outputs.release == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Verify and build
+        if: steps.version.outputs.release == 'true'
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm run test:coverage
+          npm run build
+
+      - name: Commit dist/ on a release commit and tag it
+        if: steps.version.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --detach
+          git add --force dist
+          git commit -m "Release v$VERSION (built dist/)"
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin "refs/tags/v$VERSION"
+
+      - name: Publish the GitHub release
+        if: steps.version.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh release create "v$VERSION" --verify-tag --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
