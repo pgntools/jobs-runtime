@@ -1,6 +1,6 @@
 {
   "name": "@pgntools/jobs-runtime",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Durable, multi-tab background job execution for the browser: checkpoints in IndexedDB, one leader per namespace, leases, retries, an outbox and live telemetry.",
   "license": "MIT",
   "type": "module",
