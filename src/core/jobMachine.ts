@@ -22,7 +22,8 @@ export type JobMachineEvent =
   | { type: "PAUSE" } // running / queued → paused
   | { type: "CANCEL" } // running / queued / paused / interrupted / failed → cancelled
   | { type: "LEASE_EXPIRED"; autoResume: boolean } // running → queued (autoResume) or interrupted
-  | { type: "RESUME" }; // paused / interrupted / failed → queued
+  | { type: "RESUME" } // paused / interrupted / failed → queued
+  | { type: "HOLD" }; // running → queued: the queue was held (no attempt spent)
 
 export type JobMachineEventType = JobMachineEvent["type"];
 
@@ -38,6 +39,7 @@ export const jobMachineEventTypes: readonly JobMachineEventType[] = [
   "CANCEL",
   "LEASE_EXPIRED",
   "RESUME",
+  "HOLD",
 ];
 
 const whileRunning = stateIn({ status: "running" });
@@ -70,6 +72,7 @@ export const jobMachine = setup({
             PAUSE: "paused",
             CANCEL: "cancelled",
             LEASE_EXPIRED: [{ guard: "autoResume", target: "queued" }, { target: "interrupted" }],
+            HOLD: "queued",
           },
         },
         paused: { on: { RESUME: "queued", CANCEL: "cancelled" } },

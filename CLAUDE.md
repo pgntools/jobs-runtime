@@ -1,8 +1,8 @@
 # @pgntools/jobs-runtime — working notes
 
-- The public surface is frozen by the v0.1 contract (CTA-216): `src/contract.ts` holds it and
-  `test/contract.test.ts` pins every export of every entry point against the verbatim copy in
-  `test/contract/spec.ts`. Never add an export; a contract change is a change to CTA-216 first.
+- The public surface is frozen by the v0.1 contract (CTA-216, amended in 0.3.0 by JBR-3):
+  `src/contract.ts` holds it and `test/contract.test.ts` pins every export of every entry point
+  against the verbatim copy in `test/contract/spec.ts`. Never add an export; a contract change is a change to CTA-216 first.
 - XState stays internal: no XState type or actor in the public surface.
 - Durable truth is the store; every durable change goes through `writeRecord` (normaliser +
   compare-and-set) with a transform from `src/core/records.ts`, whose status/phase moves go through

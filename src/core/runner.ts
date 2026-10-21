@@ -8,6 +8,7 @@ import {
   claim,
   commit,
   fail,
+  holdRunning,
   releaseLease,
   renewLease,
   type AnyKind,
@@ -223,6 +224,7 @@ export type RunnerEvent =
   | { type: "RECORD"; job: JobRecord | undefined }
   | { type: "ABORT" }
   | { type: "RELEASE" }
+  | { type: "HOLD" }
   | { type: "HEARTBEAT" }
   | { type: "LIVE"; payload: unknown };
 
@@ -232,7 +234,7 @@ const worker = (env: Env): Worker => ({ owner: env.owner, now: env.now(), leaseM
  * One claimed job on the leader tab: claim → (execute → commit)* until the job leaves running.
  * The lease is renewed at a third of leaseMs alongside; step and heartbeat timeouts are delayed
  * transitions. Leaving `executing` stops the unit actor, which aborts ctx.signal — that is how a
- * pause, cancel, delete, lost lease, timeout or stop() reaches the kind's step.
+ * pause, cancel, delete, lost lease, timeout, queue hold or stop() reaches the kind's step.
  */
 export const runnerMachine = setup({
   types: {
@@ -318,6 +320,7 @@ export const runnerMachine = setup({
         ],
         ABORT: { target: "ended" },
         RELEASE: { target: "releasing" },
+        HOLD: { target: "holding" },
         LIVE: { actions: sendTo("live", ({ event }) => event) },
       },
       states: {
@@ -442,6 +445,14 @@ export const runnerMachine = setup({
       invoke: {
         src: "write",
         input: ({ context }) => ({ env: context.env, id: context.job.id, edit: (job: JobRecord) => releaseLease(job, worker(context.env)) }),
+        onDone: { target: "ended", actions: { type: "keep", params: ({ event }) => event.output } },
+        onError: { target: "ended" },
+      },
+    },
+    holding: {
+      invoke: {
+        src: "write",
+        input: ({ context }) => ({ env: context.env, id: context.job.id, edit: (job: JobRecord) => holdRunning(job, worker(context.env)) }),
         onDone: { target: "ended", actions: { type: "keep", params: ({ event }) => event.output } },
         onError: { target: "ended" },
       },

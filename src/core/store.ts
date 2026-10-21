@@ -60,9 +60,30 @@ export async function readRecords(store: JobStore): Promise<JobRecord[]> {
   return records.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 
+// ── Meta: runtime-wide values ───────────────────────────────────────────
+
+/** The queue hold's meta key. */
+export const HELD_KEY = "held";
+
+type MetaStore = JobStore & Required<Pick<JobStore, "getMeta" | "putMeta">>;
+
+/** Whether the store keeps meta values: both members, or it is treated as having neither. */
+export function hasMeta(store: JobStore): store is MetaStore {
+  return typeof store.getMeta === "function" && typeof store.putMeta === "function";
+}
+
+/** Read leniently: anything but true is not held; a store without meta is never held. */
+export async function readHeld(store: JobStore): Promise<boolean> {
+  return hasMeta(store) && (await store.getMeta(HELD_KEY)) === true;
+}
+
 /** The store as the runtime sees it: every call counted as in-flight work. */
 export function trackedStore(store: JobStore, tracker: Tracker): JobStore {
+  const meta: Pick<JobStore, "getMeta" | "putMeta"> = hasMeta(store)
+    ? { getMeta: (key) => track(tracker, store.getMeta(key)), putMeta: (key, value) => track(tracker, store.putMeta(key, value)) }
+    : {};
   return {
+    ...meta,
     list: () => track(tracker, store.list()),
     get: (id) => track(tracker, store.get(id)),
     add: (job) => track(tracker, store.add(job)),

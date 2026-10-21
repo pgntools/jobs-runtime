@@ -5,6 +5,7 @@ import {
   claim,
   commit,
   fail,
+  holdRunning,
   normalise,
   releaseLease,
   renewLease,
@@ -94,6 +95,19 @@ describe("record transforms refuse what the table refuses", () => {
     const mine = { ...theirs, lease: { owner: "me", expiresAt: theirs.lease!.expiresAt } };
     expect(applyControl(mine, worker)).toBeUndefined(); // no request to act on
     expect(commit(mine, worker, { moves: ["ADVANCE", "ADVANCE", "ADVANCE", "ADVANCE"], kindVersion: 1 })).toBeUndefined();
+  });
+
+  it("holds only this worker's running job: back to queued, its attempt closed as held, a pending control honoured", () => {
+    const lease = { owner: "me", expiresAt: "2026-03-02T00:00:00.000Z" };
+    const mine = record({ status: "running", phase: "steps", state: { i: 2 }, lease, attempts: [{ n: 1, startedAt: "s" }], revision: 4 });
+    const held = holdRunning(mine, worker)!;
+    expect(held).toMatchObject({ status: "queued", phase: "steps", state: { i: 2 }, revision: 5, attempts: [{ n: 1, outcome: "held" }] });
+    expect(held.lease).toBeUndefined();
+    expect(held.history.at(-1)).toEqual({ at: now.toISOString(), type: "held" });
+    expect(holdRunning({ ...mine, lease: { ...lease, owner: "them" } }, worker)).toBeUndefined();
+    expect(holdRunning(record(), worker)).toBeUndefined();
+    expect(holdRunning({ ...mine, control: "pause" }, worker)).toMatchObject({ status: "paused", attempts: [{ outcome: "paused" }] });
+    expect(holdRunning({ ...mine, control: "cancel" }, worker)?.status).toBe("cancelled");
   });
 
   it("stalls only a running job whose lease expired", () => {

@@ -30,6 +30,28 @@ describe("jobStoreConformance", () => {
     expect(failures.join("\n")).toMatch(/compare-and-set/);
     expect(failures.join("\n")).toMatch(/never lose an update/);
   });
+
+  it("passes a store without meta, and catches one with half of it or with a leaky one", async () => {
+    const failuresOf = async (make: () => JobStore): Promise<string[]> => {
+      const failures: string[] = [];
+      for (const check of jobStoreConformance(make)) {
+        await check.run().catch((error: Error) => failures.push(`${check.name}: ${error.message}`));
+      }
+      return failures;
+    };
+    expect(await failuresOf(() => {
+      const { getMeta: _g, putMeta: _p, ...rest } = memoryJobStore();
+      return rest;
+    })).toEqual([]);
+    expect((await failuresOf(() => ({ ...memoryJobStore(), putMeta: undefined }))).join("\n")).toMatch(/come together/);
+    const leaky = (): JobStore => {
+      const values = new Map<string, unknown>();
+      return { ...memoryJobStore(), getMeta: async (key) => values.get(key), putMeta: async (key, value) => void values.set(key, value) };
+    };
+    const failures = (await failuresOf(leaky)).join("\n");
+    expect(failures).toMatch(/not a live reference/);
+    expect(failures).toMatch(/putMeta notifies/);
+  });
 });
 
 describe("indexedDbJobStore", () => {
@@ -70,17 +92,41 @@ describe("indexedDbJobStore", () => {
     const store = indexedDbJobStore({ name });
     await store.add(record("a"));
     await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.open(name, 2);
+      const request = indexedDB.open(name, 3);
       request.onsuccess = () => {
         request.result.close();
         resolve();
       };
       request.onerror = () => reject(request.error);
     });
-    // The store closed its stale connection; version 2 is newer than it knows, so opening fails...
+    // The store closed its stale connection; version 3 is newer than it knows, so opening fails...
     await expect(store.get("a")).rejects.toBeDefined();
     // ...and it does not cache the failure.
     await expect(store.list()).rejects.toBeDefined();
+  });
+
+  it("upgrades a version 1 database in place: its records kept, the meta store added", async () => {
+    const name = `v1-${++dbs}`;
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open(name, 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        db.createObjectStore("jobs", { keyPath: "id" }).put(record("old"));
+        db.createObjectStore("parts", { keyPath: ["jobId", "key", "seq"] });
+        db.createObjectStore("artifacts", { keyPath: "artifactId" }).createIndex("byJob", "jobId");
+      };
+      request.onsuccess = () => {
+        request.result.close();
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+    const store = indexedDbJobStore({ name });
+    expect((await store.get("old"))?.id).toBe("old");
+    expect(await store.getMeta!("held")).toBeUndefined();
+    await store.putMeta!("held", true);
+    expect(await store.getMeta!("held")).toBe(true);
+    expect((await store.list()).map((job) => job.id)).toEqual(["old"]);
   });
 
   it("hears another realm's writes over a BroadcastChannel", async () => {

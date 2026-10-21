@@ -66,6 +66,12 @@ export function crashAfter(store: JobStore, n: number): JobStore & { crashed: ()
     remove: write((ids: readonly string[]) => store.remove(ids)),
     putPart: write((jobId: string, key: string, seq: number, chunk: string | Uint8Array) => store.putPart(jobId, key, seq, chunk)),
     sealArtifact: write((jobId: string, key: string, meta: { name: string; mimeType: string }) => store.sealArtifact(jobId, key, meta)),
+    ...(store.getMeta && store.putMeta
+      ? {
+          getMeta: read((key: string) => store.getMeta!(key)),
+          putMeta: write((key: string, value: unknown) => store.putMeta!(key, value)),
+        }
+      : {}),
     subscribe: (listener) => store.subscribe(() => {
       if (!dead) listener();
     }),
@@ -91,6 +97,7 @@ export function killable(store: JobStore): JobStore & { kill: () => void } {
     remove: guard(crash.remove),
     putPart: guard(crash.putPart),
     sealArtifact: guard(crash.sealArtifact),
+    ...(crash.getMeta && crash.putMeta ? { getMeta: guard(crash.getMeta), putMeta: guard(crash.putMeta) } : {}),
     subscribe: (listener) => store.subscribe(() => {
       if (!killed) listener();
     }),

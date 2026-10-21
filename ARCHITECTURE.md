@@ -1,8 +1,9 @@
 # Architecture
 
 `@pgntools/jobs-runtime` executes long-running work in the browser durably: across reloads, crashes
-and several open tabs. The public contract is the frozen v0.1 surface of CTA-216 (`src/contract.ts`);
-this document is the reasoning behind it and how the implementation keeps its promises.
+and several open tabs. The public contract is the frozen v0.1 surface of CTA-216, amended in 0.3.0 by
+the queue hold (JBR-3) (`src/contract.ts`); this document is the reasoning behind it and how the
+implementation keeps its promises.
 
 ## Design
 
@@ -21,6 +22,14 @@ schedules every lane; any other tab only reads and writes commands. On taking le
 whenever a lease runs out later — every running job whose lease has expired is *stalled*: it becomes
 `interrupted`, or `queued` when its kind auto-resumes. With no Web Locks (jsdom, old browsers), a
 lease-only mode serves: every tab schedules, and a tab claims only a job whose lease has expired.
+
+**The queue hold.** `hold()` is a runtime-wide switch, one durable value in the store's meta
+(`JobStore.getMeta` / `putMeta`, key `held`) — not a write on every record. Every tab reads it with
+the records and learns of changes the same way (the store subscription and the bus). While it is
+held, no lane claims a queued job, and the scheduling tab's runners abort their steps and hand their
+jobs back to `queued` from their checkpoints (`HOLD`); queued, paused and other jobs are left as they
+are, so `release()` only clears the value and the lanes go on in their usual order. A job the user
+paused is never resumed by a release, and per-job commands keep working while held.
 
 **Leases.** Claiming writes `lease { owner, expiresAt }` (default 30 s), renewed at a third of that
 and on every checkpoint. Losing the lease aborts the step and writes nothing more.
@@ -57,7 +66,7 @@ news, cleared when the job's run ends, and never stored.
 
 **History.** `JobRecord.history` holds the last 100 events: enqueued, claimed, planned,
 checkpointed (every 10th step), finalized, output-applied, retry-scheduled, pause-requested, paused,
-resumed, cancelled, requeued / interrupted, lease-released, failed, done.
+resumed, held, cancelled, requeued / interrupted, lease-released, failed, done.
 
 **Versioning and leniency.** Every record read goes through a normaliser: an unknown status reads
 as `interrupted`, missing fields take defaults, and a record of an unregistered kind is kept but
@@ -104,7 +113,7 @@ flowchart TD
   runner --> throttle
 ```
 
-- **reader** re-reads the records on every store change (this tab or another) and on every
+- **reader** re-reads the records (and the queue hold) on every store change (this tab or another) and on every
   `changed` nudge on the bus, one read at a time (coalesced), and sends them to the root as
   `RECORDS`. Live messages from other tabs arrive here too.
 - **leader** acquires the Web Lock and reports the tab's role: `leader`, `follower` (waiting for the
@@ -113,7 +122,8 @@ flowchart TD
 - **root** holds the records view (`snapshot()`), forwards it to the lanes with whether this tab may
   schedule, and — while it may — spawns a **stall** write for every running job whose lease expired
   and that no runner of this tab holds, with a delayed `WAKE` at the next lease expiry.
-- **lane** claims the next eligible jobs up to its concurrency, spawning one **runner** each; jobs
+- **lane** claims the next eligible jobs up to its concurrency (none while the queue is held: it
+  tells its runners to hold instead), spawning one **runner** each; jobs
   running in other tabs under a live lease count against the concurrency, so a lane keeps its limit
   across a handover and in lease-only mode. It wakes itself with a delayed event at the earliest
   future `runAfter`. When the tab stops scheduling, it tells its runners to hand their leases back.
@@ -124,7 +134,8 @@ flowchart TD
   Leaving the executing state stops the unit actor, which aborts `ctx.signal` — that is how a pause,
   cancel, delete, lost lease, timeout or `stop()` reaches the kind's step. A newer record showing a
   control request moves the runner to honour it; one showing the job gone or the lease lost ends the
-  runner without another write.
+  runner without another write. A `HOLD` from its lane aborts the unit and writes the job back to
+  `queued`, a pending control request winning over it.
 - **liveThrottle** (one per runner) and **liveView** (one per runtime) implement live telemetry.
 
 **The store stays the only durable truth.** Actor snapshots are never persisted: on `start()` and on
@@ -160,6 +171,7 @@ stateDiagram-v2
   paused --> cancelled: CANCEL
   interrupted --> cancelled: CANCEL
   failed --> cancelled: CANCEL
+  running --> queued: HOLD (queue held, step aborted, no attempt spent)
   running --> queued: LEASE_EXPIRED [autoResume]
   running --> interrupted: LEASE_EXPIRED [else]
   paused --> queued: RESUME
@@ -202,6 +214,10 @@ the record is removed with its parts and artifacts.
 - **Commands honoured within one step.** A pause or cancel written by any tab aborts the running
   step as soon as the leader sees it, and a step that finishes concurrently writes its checkpoint
   and honours the request in the same write.
+- **Queue hold.** While held, no tab claims a queued job; a running job's step is aborted as soon as
+  the scheduling tab sees the hold, and the job goes back to `queued` with its checkpoint, its attempt
+  closed as `held` (never counted against `maxAttempts`). The hold is durable: it survives a reload, a
+  leader handover and lease-only mode, because every tab reads it from the store.
 - **Handover.** When the leader's tab dies, its lock passes to another tab, which stalls the
   leader's jobs once their leases expire (immediately for leases handed back by `stop()`).
 - **Deterministic tests.** With `manualClock()`, every timer of the runtime waits for `advance()`.
@@ -222,6 +238,9 @@ store, and asserts all four properties above on restart.
   concurrency, but two tabs can claim two different jobs of a lane at the same instant.
 - **Crash loops are not bounded.** An interruption (a crash, a closed tab) does not spend an attempt,
   so a step that kills its tab every time is retried on every reload when its kind auto-resumes.
+- **A hold is not instantaneous.** A step that finishes before the scheduling tab sees the hold
+  commits its checkpoint; the next one is aborted. A job claimed while the hold is being read is held
+  on the next store change.
 - **Live telemetry is best effort.** It is never stored; a reader joining late sees it from the next
   re-send.
 - **Retention is best effort across tabs.** Two tabs enqueueing at once may both prune; the cap may
@@ -231,10 +250,29 @@ store, and asserts all four properties above on restart.
 
 - **Priority**: a higher number runs first.
 - **Attempt budget**: an attempt counts against `maxAttempts` when it ended in an error
-  (`retry-scheduled` or `failed`); pauses, cancels and interruptions do not. Resuming a failed job
+  (`retry-scheduled` or `failed`); pauses, cancels, holds and interruptions do not. Resuming a failed job
   sets `maxAttempts` to the attempts spent plus the kind's `retry.maxAttempts`.
 - **Backoff**: `min(maxMs, initialMs × factor^(n−1))` for the n-th failure; jitter picks uniformly in
   the upper half, `[d/2, d]`.
+- **Queue hold API**: `hold()` / `release()` answer like the other commands; both are idempotent (an
+  unchanged value is not written). `held()` is undefined until the first read, like `snapshot()`, and
+  `subscribe()` hears its changes — no separate subscription.
+- **What a held job becomes**: `queued`, not `paused` — a new `HOLD` move (running → queued) and
+  attempt outcome `held` — so a release never has to tell held jobs from paused ones and resumes none
+  of the latter. Queued jobs are left as they are, so the queue order is untouched.
+- **Order after a release**: the usual one (priority, then `createdAt`, `runAfter` respected). The held
+  job keeps its place: it was the head of its lane when claimed, so only a higher-priority job
+  enqueued meanwhile runs before it.
+- **A pending pause or cancel wins over a hold**: the runner honours the control request instead.
+  A `resume()` while held puts the job back to `queued`, where it waits for the release.
+- **Stalls while held** follow the kind's `autoResume` as always: a job whose tab died is
+  interrupted, not held. `stop()` while held hands its own running jobs back to `queued` (held)
+  instead of only releasing their leases.
+- **A store without meta** (`getMeta` / `putMeta` both optional) cannot be held: `hold()` resolves
+  `"not-allowed"`, `release()` is a no-op and `held()` reads false. `jobStoreConformance()` checks the
+  pair when a store has it. `indexedDbJobStore` keeps meta in its own object store (database version
+  2; a version 1 database is upgraded in place, so a tab still running an older version of the
+  package must reload).
 - **Finished** (retention, `removeUnfinishedOf`): `done`, `cancelled` and `failed`.
 - **Non-resumable kinds** re-plan whenever a run re-enters the steps phase (a resume, a retry, a
   stall); a run in finalize or outputs carries on.

@@ -1,10 +1,12 @@
 import type { JobRecord, JobStore } from "../contract.js";
 import { artifactIdOf, blobOf, checkRevision, conflict, joinParts, toBytes } from "../core/store.js";
 
-const VERSION = 1;
+/** 1: jobs, parts, artifacts. 2: meta (runtime-wide values: the queue hold). */
+const VERSION = 2;
 const JOBS = "jobs";
 const PARTS = "parts";
 const ARTIFACTS = "artifacts";
+const META = "meta";
 
 type PartRow = { jobId: string; key: string; seq: number; bytes: Uint8Array };
 type ArtifactRow = { artifactId: string; jobId: string; key: string; name: string; mimeType: string; bytes: Uint8Array };
@@ -17,11 +19,14 @@ let realmId: string | undefined;
 function openDatabase(name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(name, VERSION);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result;
-      db.createObjectStore(JOBS, { keyPath: "id" });
-      db.createObjectStore(PARTS, { keyPath: ["jobId", "key", "seq"] });
-      db.createObjectStore(ARTIFACTS, { keyPath: "artifactId" }).createIndex("byJob", "jobId");
+      if (event.oldVersion < 1) {
+        db.createObjectStore(JOBS, { keyPath: "id" });
+        db.createObjectStore(PARTS, { keyPath: ["jobId", "key", "seq"] });
+        db.createObjectStore(ARTIFACTS, { keyPath: "artifactId" }).createIndex("byJob", "jobId");
+      }
+      if (event.oldVersion < 2) db.createObjectStore(META);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -33,8 +38,8 @@ const partsOf = (jobId: string, key?: string): IDBKeyRange =>
   key === undefined ? IDBKeyRange.bound([jobId], [jobId, []]) : IDBKeyRange.bound([jobId, key], [jobId, key, []]);
 
 /**
- * The JobStore over IndexedDB, database `name`: records, artifact parts and sealed artifacts in
- * their own object stores. update() is a read-modify-write in one readwrite transaction with the
+ * The JobStore over IndexedDB, database `name`: records, artifact parts, sealed artifacts and meta
+ * values in their own object stores. update() is a read-modify-write in one readwrite transaction with the
  * revision compare-and-set. subscribe() hears every write, from this tab or another.
  * Nothing is opened until the first call.
  */
@@ -210,6 +215,19 @@ export function indexedDbJobStore({ name }: { name: string }): JobStore {
           finish(row && blobOf(row.bytes, row.mimeType));
         };
       }),
+
+    getMeta: (key) =>
+      run<unknown>([META], "readonly", (tx, finish) => {
+        const request = tx.objectStore(META).get(key);
+        request.onsuccess = () => finish(request.result);
+      }),
+
+    async putMeta(key, value) {
+      await run<void>([META], "readwrite", (tx) => {
+        tx.objectStore(META).put(value, key);
+      });
+      changed();
+    },
 
     subscribe(listener) {
       channelOf();

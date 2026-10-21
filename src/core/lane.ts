@@ -11,13 +11,15 @@ export type LaneInput = { env: Env; name: string; concurrency: number };
 type LaneContext = LaneInput & {
   records: readonly JobRecord[];
   active: boolean;
+  /** The queue is held: nothing claimed, this lane's runners told to hold. */
+  held: boolean;
   runners: Readonly<Record<string, Runner>>;
   /** The revision each job's last runner was spawned from: not spawned again until the record moves on. */
   spent: Readonly<Record<string, number>>;
 };
 
 export type LaneEvent =
-  | { type: "SYNC"; records: readonly JobRecord[]; active: boolean }
+  | { type: "SYNC"; records: readonly JobRecord[]; active: boolean; held: boolean }
   | { type: "WAKE" }
   | { type: "ABORT"; ids: readonly string[] }
   | { type: "RUNNER_ENDED"; jobId: string; revision: number };
@@ -31,9 +33,10 @@ export function byTurn(a: JobRecord, b: JobRecord): number {
 
 /**
  * One named queue. Fed the records on every store change; claims the next jobs (one runner each)
- * up to its concurrency while this tab may schedule, and wakes itself with a delayed event at the
- * earliest future runAfter — never a polling loop. Jobs other tabs run under a live lease count
- * against the concurrency, so a lane keeps its limit across a handover and in lease-only mode.
+ * up to its concurrency while this tab may schedule and the queue is not held, and wakes itself
+ * with a delayed event at the earliest future runAfter — never a polling loop. Jobs other tabs run
+ * under a live lease count against the concurrency, so a lane keeps its limit across a handover and
+ * in lease-only mode.
  */
 export const laneMachine = setup({
   types: {
@@ -54,6 +57,11 @@ export const laneMachine = setup({
       const mine = records.filter((job) => env.kinds.get(job.kind)?.lane === name);
       for (const [jobId, runner] of Object.entries(runners)) {
         enqueue.sendTo(runner, { type: "RECORD", job: records.find((job) => job.id === jobId) });
+      }
+      if (context.held) {
+        // A control request in the RECORD above wins: a runner honouring it ignores the HOLD.
+        for (const runner of Object.values(runners)) enqueue.sendTo(runner, { type: "HOLD" });
+        return;
       }
       const elsewhere = mine.filter((job) => job.status === "running" && !(job.id in runners) && !leaseExpired(job, now)).length;
       let free = concurrency - Object.keys(runners).length - elsewhere;
@@ -83,13 +91,14 @@ export const laneMachine = setup({
   },
 }).createMachine({
   id: "lane",
-  context: ({ input }) => ({ ...input, records: [], active: false, runners: {}, spent: {} }),
+  context: ({ input }) => ({ ...input, records: [], active: false, held: false, runners: {}, spent: {} }),
   on: {
     SYNC: {
       actions: [
         assign({
           records: ({ event }) => event.records,
           active: ({ event }) => event.active,
+          held: ({ event }) => event.held,
           spent: ({ context, event }) => {
             const ids = new Set(event.records.map((job) => job.id));
             return Object.fromEntries(Object.entries(context.spent).filter(([id]) => ids.has(id)));
