@@ -1,5 +1,6 @@
-// The CTA-216 contract, copied verbatim (comments trimmed). The type test compares the package's
-// exports against this copy, so the two can only drift together — never silently on one side.
+// The CTA-216 contract with its 0.3.0 amendment (JBR-3: the queue hold), copied verbatim (comments
+// trimmed). The type test compares the package's exports against this copy, so the two can only
+// drift together — never silently on one side.
 
 export type EntityRef = { type: string; id: string };
 
@@ -20,7 +21,7 @@ export type OutputPlan = { key: string } & Record<string, unknown>;
 
 export type JobAttempt = {
   n: number; startedAt: string; endedAt?: string;
-  outcome?: "done" | "failed" | "retry-scheduled" | "paused" | "cancelled" | "interrupted";
+  outcome?: "done" | "failed" | "retry-scheduled" | "paused" | "cancelled" | "interrupted" | "held";
   error?: JobError;
 };
 
@@ -97,6 +98,8 @@ export interface JobStore {
   sealArtifact(jobId: string, key: string, meta: { name: string; mimeType: string }): Promise<{ artifactId: string; size: number }>;
   readArtifact(artifactId: string): Promise<Blob | undefined>;
   subscribe(listener: () => void): () => void;
+  getMeta?(key: string): Promise<unknown>;
+  putMeta?(key: string, value: unknown): Promise<void>;
 }
 export interface LeaderLock { acquire(name: string, onLost?: () => void): Promise<() => void> }
 export interface EventBus { publish(message: unknown): void; subscribe(listener: (message: unknown) => void): () => void }
@@ -124,6 +127,9 @@ export interface JobRuntime {
   cancel(id: string): Promise<ControlProblem | undefined>;
   remove(ids: readonly string[]): Promise<ControlProblem | undefined>;
   removeUnfinishedOf(subjects: readonly EntityRef[]): Promise<void>;
+  hold(): Promise<ControlProblem | undefined>;
+  release(): Promise<ControlProblem | undefined>;
+  held(): boolean | undefined;
   snapshot(): readonly JobRecord[] | undefined;
   subscribe(listener: () => void): () => void;
   liveOf(id: string): unknown | undefined;

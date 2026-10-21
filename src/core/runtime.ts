@@ -12,6 +12,7 @@ import { drain, newTracker, setStarted, type Tracker } from "./activity.js";
 import type { BusMessage, Env, Envelope } from "./env.js";
 import type { liveViewMachine } from "./live.js";
 import {
+  holdRunning,
   isFinished,
   newRecord,
   releaseLease,
@@ -22,7 +23,7 @@ import {
   type Command,
 } from "./records.js";
 import { rootMachine } from "./root.js";
-import { readRecords, trackedStore, writeRecord } from "./store.js";
+import { hasMeta, HELD_KEY, readHeld, readRecords, trackedStore, writeRecord } from "./store.js";
 
 export const DEFAULT_LEASE_MS = 30_000;
 export const DEFAULT_LIVE_INTERVAL_MS = 250;
@@ -84,6 +85,7 @@ export function createJobRuntime(options: JobRuntimeOptions): JobRuntime {
 
   let session: Session | undefined;
   let records: readonly JobRecord[] | undefined;
+  let held: boolean | undefined;
   let live: Readonly<Record<string, { payload: unknown }>> = {};
   const listeners = new Set<() => void>();
   const liveListeners = new Set<() => void>();
@@ -142,8 +144,9 @@ export function createJobRuntime(options: JobRuntimeOptions): JobRuntime {
     actor.subscribe({
       next: (snapshot) => {
         if (session !== current) return;
-        if (snapshot.context.records !== records) {
+        if (snapshot.context.records !== records || snapshot.context.held !== held) {
           records = snapshot.context.records;
+          held = snapshot.context.held;
           notify(listeners);
         }
       },
@@ -166,16 +169,19 @@ export function createJobRuntime(options: JobRuntimeOptions): JobRuntime {
     const current = session;
     if (!current) return Promise.resolve();
     current.stopping ??= (async () => {
-      const ran = Object.values(current.actor.getSnapshot().context.local).flat();
+      const { local, held: wasHeld } = current.actor.getSnapshot().context;
+      const ran = Object.values(local).flat();
       current.actor.stop();
       await drain(tracker);
-      // Hand back this tab's leases so the next leader stalls the jobs at once, not after leaseMs.
+      // Hand back this tab's leases so the next leader stalls the jobs at once, not after leaseMs;
+      // while the queue is held, hold them instead — back to queued, as the hold would have.
       const owner = current.env.owner;
+      const handBack = wasHeld === true ? holdRunning : releaseLease;
       const mine = await readRecords(store).catch(() => []);
       await Promise.allSettled(
         mine
           .filter((job) => job.lease?.owner === owner)
-          .map((job) => writeRecord(store, job.id, (stored) => releaseLease(stored, { owner, now: now() }))),
+          .map((job) => writeRecord(store, job.id, (stored) => handBack(stored, { owner, now: now() }))),
       );
       for (const jobId of ran) publishRaw(owner, { type: "live-clear", jobId });
       if (session !== current) return; // started again meanwhile: the new session owns the view
@@ -201,6 +207,19 @@ export function createJobRuntime(options: JobRuntimeOptions): JobRuntime {
         return "next" in decision ? decision.next : undefined;
       });
       if (!written) return refused ? "not-allowed" : "missing";
+    } catch {
+      return "storage";
+    }
+    nudge();
+    return undefined;
+  };
+
+  /** The queue hold: one meta write, skipped when the store already reads `value`. */
+  const setHeld = async (value: boolean): Promise<ControlProblem | undefined> => {
+    if (!hasMeta(store)) return value ? "not-allowed" : undefined;
+    try {
+      if ((await readHeld(store)) === value) return undefined;
+      await store.putMeta(HELD_KEY, value);
     } catch {
       return "storage";
     }
@@ -284,6 +303,9 @@ export function createJobRuntime(options: JobRuntimeOptions): JobRuntime {
       nudge();
     },
 
+    hold: () => setHeld(true),
+    release: () => setHeld(false),
+    held: () => held,
     snapshot: () => records,
     subscribe(listener) {
       listeners.add(listener);

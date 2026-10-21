@@ -132,6 +132,95 @@ describe("multi-tab", () => {
     expect(job(b, heavy)).toMatchObject({ status: "done", state: { visited: [0, 1, 2] } });
   }, 20_000);
 
+  it("holds the queue from any tab: the leader stops its job, every tab sees it, and the release continues it", async () => {
+    const ran: string[] = [];
+    const { open, clock } = tabs((tab) => [{ onStep: async (s, ctx) => {
+      ran.push(`${tab}:${s.i}`);
+      await sleep(clock, 100, ctx.signal);
+    } }]);
+    const a = open("A").runtime;
+    const b = open("B").runtime;
+    a.start();
+    b.start();
+    const id = await enqueue(b, "test.count", 3);
+    await settle(a, b);
+    await clock.advance(100);
+    expect(job(b, id)).toMatchObject({ status: "running", state: { i: 1 } });
+
+    expect(await b.hold()).toBeUndefined(); // a follower's command, through the store and the bus
+    await settle(a, b);
+    expect([a.held(), b.held()]).toEqual([true, true]);
+    expect(job(b, id)).toMatchObject({ status: "queued", state: { i: 1 }, attempts: [{ outcome: "held" }] });
+    await clock.advance(1_000);
+    await settle(a, b);
+    expect(job(b, id).status).toBe("queued");
+
+    expect(await a.release()).toBeUndefined();
+    await settle(a, b);
+    expect([a.held(), b.held()]).toEqual([false, false]);
+    for (let n = 0; n < 3; n++) await clock.advance(100);
+    await settle(a, b);
+    expect(job(b, id)).toMatchObject({ status: "done", state: { visited: [0, 1, 2] } });
+    expect(ran).toEqual(["A:0", "A:1", "A:1", "A:2"]);
+  });
+
+  it("stays held across a leader handover and a reload, until released", async () => {
+    const { open, clock } = tabs(() => [{ autoResume: false, onStep: (_s, ctx) => sleep(clock, 100, ctx.signal) }]);
+    const tabA = open("A", killable);
+    const a = tabA.runtime;
+    const b = open("B").runtime;
+    a.start();
+    b.start();
+    const id = await enqueue(b, "test.count", 3);
+    await settle(a, b);
+    await clock.advance(100);
+    expect(await a.hold()).toBeUndefined();
+    await settle(a, b);
+    expect(job(b, id)).toMatchObject({ status: "queued", state: { i: 1 } });
+
+    // The leader's tab dies; B takes the lock and finds the queue held.
+    tabA.store.kill();
+    await a.stop();
+    await settle(b);
+    await clock.advance(LEASE_MS);
+    await settle(b);
+    expect(b.held()).toBe(true);
+    expect(job(b, id).status).toBe("queued");
+
+    // A reload: a fresh tab over the same database reads the hold before anything runs.
+    const c = open("C").runtime;
+    c.start();
+    await settle(b, c);
+    expect(c.held()).toBe(true);
+    expect(await c.release()).toBeUndefined();
+    await settle(b, c);
+    for (let n = 0; n < 2; n++) await clock.advance(100);
+    await settle(b, c);
+    expect(job(c, id)).toMatchObject({ status: "done", state: { visited: [0, 1, 2] } });
+    expect(job(c, id).attempts.map((x) => x.outcome)).toEqual(["held", "done"]);
+    expect(job(c, id).attempts[1]!.n).toBe(2);
+  });
+
+  it("holds every scheduling tab in lease-only mode", async () => {
+    const ran: string[] = [];
+    const { open } = tabs((tab) => [{ onStep: (_s, _c, input) => void ran.push(`${tab}:${input.steps}`) }], { lock: null });
+    const a = open("A").runtime;
+    const b = open("B").runtime;
+    a.start();
+    b.start();
+    await settle(a, b);
+    expect(await a.hold()).toBeUndefined();
+    await settle(a, b);
+    const ids = await Promise.all([1, 1, 1].map(() => enqueue(b, "test.count", 1)));
+    await settle(a, b);
+    expect(ran).toEqual([]);
+    expect(ids.map((id) => job(a, id).status)).toEqual(["queued", "queued", "queued"]);
+    expect(await b.release()).toBeUndefined();
+    await settle(a, b);
+    expect(ran).toHaveLength(3);
+    for (const id of ids) expect(job(a, id).attempts).toHaveLength(1);
+  });
+
   it("stops at once when the lock is taken away, handing its leases back", async () => {
     let lose: (() => void) | undefined;
     let grants = 0;

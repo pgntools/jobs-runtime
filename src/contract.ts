@@ -1,5 +1,6 @@
-// The frozen @pgntools/jobs-runtime v0.1 contract (CTA-216). Names and shapes are binding;
-// a change here is a semver-minor (or major) bump and a change to CTA-216 first.
+// The @pgntools/jobs-runtime contract: the frozen v0.1 surface of CTA-216, amended in 0.3.0 by the
+// queue hold (JBR-3). Names and shapes are binding; a change here is a semver-minor (or major) bump
+// and a change to CTA-216 first.
 // test/contract.test.ts pins every export of every entry point.
 
 // ── Identity and records ────────────────────────────────────────────────
@@ -36,7 +37,7 @@ export type JobAttempt = {
   n: number;
   startedAt: string;
   endedAt?: string;
-  outcome?: "done" | "failed" | "retry-scheduled" | "paused" | "cancelled" | "interrupted";
+  outcome?: "done" | "failed" | "retry-scheduled" | "paused" | "cancelled" | "interrupted" | "held";
   error?: JobError;
 };
 
@@ -164,6 +165,13 @@ export interface JobStore {
   readArtifact(artifactId: string): Promise<Blob | undefined>;
   /** Any write, this tab or another. */
   subscribe(listener: () => void): () => void;
+  /**
+   * Optional, both or neither: small runtime-wide values (the queue hold), kept apart from the
+   * records and read by value. A store without them cannot hold the queue: hold() resolves
+   * "not-allowed" and held() reads false. putMeta is a write: subscribe() hears it.
+   */
+  getMeta?(key: string): Promise<unknown>;
+  putMeta?(key: string, value: unknown): Promise<void>;
 }
 
 export interface LeaderLock {
@@ -197,8 +205,18 @@ export interface JobRuntime {
   remove(ids: readonly string[]): Promise<ControlProblem | undefined>;
   /** An entity deleted. */
   removeUnfinishedOf(subjects: readonly EntityRef[]): Promise<void>;
+  /**
+   * Holds the queue, durably and for every tab: no lane claims a queued job, and every running job
+   * stops at its checkpoint (its step aborted) and goes back to queued. Idempotent.
+   */
+  hold(): Promise<ControlProblem | undefined>;
+  /** Lets the queue run again from its checkpoints, in its usual order. Idempotent: a no-op when not held. */
+  release(): Promise<ControlProblem | undefined>;
+  /** Undefined until the first read lands. */
+  held(): boolean | undefined;
   /** Undefined until the first read lands. */
   snapshot(): readonly JobRecord[] | undefined;
+  /** Any change of snapshot() or held(). */
   subscribe(listener: () => void): () => void;
   liveOf(id: string): unknown | undefined;
   subscribeLive(listener: () => void): () => void;

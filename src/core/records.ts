@@ -252,6 +252,20 @@ function honourControl(job: JobRecord, now: Date): JobRecord | undefined {
   );
 }
 
+/**
+ * The queue was held: the worker's running job goes back to queued from its checkpoint (its step
+ * already aborted), the attempt closed as held — not spent. A pending pause or cancel wins.
+ */
+export function holdRunning(job: JobRecord, { owner, now }: Pick<Worker, "owner" | "now">): JobRecord | undefined {
+  if (!ownedBy(job, owner)) return undefined;
+  if (job.control !== undefined) {
+    const next = honourControl(job, now);
+    return next && revise(next, now);
+  }
+  const next = moved(job, { type: "HOLD" });
+  return next && revise(withEvent(closeAttempt(without(next, "lease"), now, "held"), now, "held"), now);
+}
+
 /** The worker acting on an observed control request (its step already aborted). */
 export function applyControl(job: JobRecord, { owner, now }: Pick<Worker, "owner" | "now">): JobRecord | undefined {
   if (!ownedBy(job, owner) || job.control === undefined) return undefined;

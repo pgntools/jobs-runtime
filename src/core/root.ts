@@ -4,12 +4,12 @@ import { readEnvelope, type Env } from "./env.js";
 import { laneMachine } from "./lane.js";
 import { liveViewMachine } from "./live.js";
 import { leaseExpired, stall } from "./records.js";
-import { readRecords, writeRecord } from "./store.js";
+import { readHeld, readRecords, writeRecord } from "./store.js";
 
 export type Role = "pending" | "leader" | "follower" | "lease-only";
 
 export type RootEvent =
-  | { type: "RECORDS"; records: readonly JobRecord[] }
+  | { type: "RECORDS"; records: readonly JobRecord[]; held: boolean }
   | { type: "ROLE"; role: Role }
   | { type: "LOCAL"; lane: string; ids: readonly string[] }
   | { type: "WAKE" }
@@ -19,8 +19,8 @@ export type RootEvent =
 
 /**
  * The store channel: every store change (this tab or another) and every "changed" nudge on the bus
- * re-reads the records — one read at a time, coalesced — and sends them up as RECORDS. Live
- * telemetry from other tabs arrives here too.
+ * re-reads the records and the queue hold — one read at a time, coalesced — and sends them up as
+ * RECORDS. Live telemetry from other tabs arrives here too.
  */
 const readerLogic = fromCallback<RootEvent, { env: Env }>(({ sendBack, input: { env } }) => {
   let disposed = false;
@@ -35,8 +35,8 @@ const readerLogic = fromCallback<RootEvent, { env: Env }>(({ sendBack, input: { 
     do {
       dirty = false;
       try {
-        const records = await readRecords(env.store);
-        if (!disposed) sendBack({ type: "RECORDS", records });
+        const [records, held] = await Promise.all([readRecords(env.store), readHeld(env.store)]);
+        if (!disposed) sendBack({ type: "RECORDS", records, held });
       } catch {
         // The view stays as it was; the next store change reads again.
       }
@@ -125,6 +125,8 @@ type RootContext = {
   env: Env;
   /** Undefined until the first read lands. */
   records: readonly JobRecord[] | undefined;
+  /** The queue hold, read with the records: undefined until the first read lands. */
+  held: boolean | undefined;
   role: Role;
   lanes: Readonly<Record<string, Lane>>;
   /** Jobs this tab's runners hold, per lane. */
@@ -154,7 +156,7 @@ export const rootMachine = setup({
     syncLanes: enqueueActions(({ context, enqueue }) => {
       if (!context.records) return;
       for (const lane of Object.values(context.lanes)) {
-        enqueue.sendTo(lane, { type: "SYNC", records: context.records, active: schedules(context.role) });
+        enqueue.sendTo(lane, { type: "SYNC", records: context.records, active: schedules(context.role), held: context.held === true });
       }
     }),
     stallExpired: enqueueActions(({ context, enqueue }) => {
@@ -193,6 +195,7 @@ export const rootMachine = setup({
   context: ({ input, spawn }) => ({
     env: input.env,
     records: undefined,
+    held: undefined,
     role: "pending",
     local: {},
     stalling: {},
@@ -209,7 +212,9 @@ export const rootMachine = setup({
     { id: "leader", src: "leader", input: ({ context }) => ({ env: context.env }) },
   ],
   on: {
-    RECORDS: { actions: [assign({ records: ({ event }) => event.records }), "syncLanes", "stallExpired"] },
+    RECORDS: {
+      actions: [assign({ records: ({ event }) => event.records, held: ({ event }) => event.held }), "syncLanes", "stallExpired"],
+    },
     ROLE: { actions: [assign({ role: ({ event }) => event.role }), "syncLanes", "stallExpired"] },
     LOCAL: { actions: [assign({ local: ({ context, event }) => ({ ...context.local, [event.lane]: event.ids }) }), "stallExpired"] },
     WAKE: { actions: "stallExpired" },

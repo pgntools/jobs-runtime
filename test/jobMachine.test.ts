@@ -18,6 +18,7 @@ const nextPhase: Partial<Record<JobPhase, JobPhase>> = { plan: "steps", steps: "
  *   running → queued (retry); running → failed; running / queued → paused;
  *   running / queued / paused / interrupted / failed → cancelled;
  *   running → interrupted, or queued when its kind auto-resumes; paused / interrupted / failed → queued;
+ *   running → queued (the queue held);
  *   done and cancelled are terminal. Phases move only while running.
  */
 function expected({ status, phase }: Position, event: JobMachineEvent): Position | undefined {
@@ -45,6 +46,8 @@ function expected({ status, phase }: Position, event: JobMachineEvent): Position
       return status === "running" ? to(event.autoResume ? "queued" : "interrupted") : undefined;
     case "RESUME":
       return ["paused", "interrupted", "failed"].includes(status) ? to("queued") : undefined;
+    case "HOLD":
+      return status === "running" ? to("queued") : undefined;
   }
 }
 

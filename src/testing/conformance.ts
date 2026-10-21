@@ -132,6 +132,37 @@ export function jobStoreConformance(make: () => JobStore | Promise<JobStore>): {
       await settled(() => true, "");
       equal(heard, before, "no notification after unsubscribe");
     }),
+
+    check("meta is optional: both getMeta and putMeta, or neither", async (store) => {
+      equal(typeof store.getMeta === "function", typeof store.putMeta === "function", "getMeta and putMeta come together");
+    }),
+
+    check("meta values round-trip by value, apart from the records", async (store) => {
+      if (!store.getMeta || !store.putMeta) return; // a store without meta cannot hold the queue
+      equal(await store.getMeta("missing"), undefined, "an unknown key reads undefined");
+      const value = { held: true, at: "2026-01-01T00:00:00.000Z" };
+      await store.putMeta("k", value);
+      value.held = false;
+      const read = (await store.getMeta("k")) as typeof value | undefined;
+      equal(read?.held, true, "getMeta returns what was put, not a live reference");
+      read!.held = false;
+      equal(((await store.getMeta("k")) as typeof value | undefined)?.held, true, "a read value is a copy");
+      await store.putMeta("k", false);
+      equal(await store.getMeta("k"), false, "putMeta overwrites");
+      await store.add(record("k"));
+      await store.remove(["k"]);
+      equal(await store.getMeta("k"), false, "removing records leaves meta alone");
+      equal((await store.list()).length, 0, "meta values are not records");
+    }),
+
+    check("subscribe hears putMeta", async (store) => {
+      if (!store.putMeta) return;
+      let heard = 0;
+      const unsubscribe = store.subscribe(() => heard++);
+      await store.putMeta("k", true);
+      await settled(() => heard >= 1, "putMeta notifies");
+      unsubscribe();
+    }),
   ];
 }
 
