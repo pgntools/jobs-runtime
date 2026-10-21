@@ -124,6 +124,10 @@ await jobs.cancel(id);
 await jobs.remove([id]); // any status; a running one is aborted first
 await jobs.removeUnfinishedOf([{ type: "collection", id: "main" }]); // an entity was deleted
 
+await jobs.hold(); // the whole queue, every tab, durably: running jobs stop at their checkpoint
+jobs.held(); // true (undefined until the first read); subscribe() hears changes
+await jobs.release(); // the queue goes on in its usual order; paused jobs stay paused
+
 const blob = await jobs.readArtifact(artifactId);
 ```
 

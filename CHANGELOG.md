@@ -10,6 +10,25 @@ turns that section into the release's own.
 
 ## [Unreleased]
 
+### Added
+
+- The queue hold (JBR-3), a contract amendment to CTA-216's v0.1 surface: `JobRuntime.hold()`,
+  `release()` and `held()`. While held, no lane in any tab claims a queued job, and every running
+  job's step is aborted and the job goes back to `queued` from its checkpoint (history `held`,
+  attempt outcome `held`, no attempt spent). `release()` lets the queue go on in its usual order;
+  paused jobs stay paused, and per-job commands keep working while held. The hold is durable and
+  shared: it survives reloads and leader handovers, lease-only mode too. `subscribe()` also hears
+  changes of `held()`.
+- `JobStore.getMeta` / `putMeta` (optional, both or neither): runtime-wide values such as the hold.
+  `memoryJobStore()` and `indexedDbJobStore()` implement them, and `jobStoreConformance()` checks
+  them. A store without them cannot be held (`hold()` resolves `"not-allowed"`).
+
+### Changed
+
+- `JobAttempt.outcome` gains `"held"`; the job machine gains `HOLD` (running → queued).
+- `indexedDbJobStore` opens its database at version 2, adding a `meta` object store; a version 1
+  database is upgraded in place (tabs still on an older package version must reload).
+
 ## [0.2.1] - 2026-10-15
 
 ### Added
