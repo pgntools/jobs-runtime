@@ -1,0 +1,1 @@
+{"version":3,"file":"manualClock.d.ts","sourceRoot":"","sources":["../../src/testing/manualClock.ts"],"names":[],"mappings":"AAIA;;;GAGG;AACH,wBAAgB,WAAW,CAAC,KAAK,GAAE,IAAI,GAAG,MAAM,GAAG,MAAmC;eAgBzE,IAAI;gBAKI,OAAO,UAAU;kBAGjB,OAAO,YAAY;IACpC;;;OAGG;gBACe,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IAaxC,8BAA8B;mBACjB,MAAM;EAEtB"}
